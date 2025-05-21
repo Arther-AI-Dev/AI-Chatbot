@@ -4,17 +4,20 @@ from langchain.llms.base import LLM
 from langchain.chains import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
 from langchain.prompts import PromptTemplate
+from langchain.embeddings import HuggingFaceEmbeddings
+from langchain.document_loaders import TextLoader
+from langchain.vectorstores import FAISS
+import glob
 
-
-
+# ----------------------------------------
+# 1. Define LocalLLM with pydantic fields
+# ----------------------------------------
 class LocalLLM(LLM):
-    # ประกาศฟิลด์ให้ Pydantic รู้จัก
     api_url: str
     model_name: str
 
     @property
     def _llm_type(self) -> str:
-        """ชื่อชนิดของ LLM เพื่อ logging ภายใน LangChain"""
         return "local_llm"
 
     @property
@@ -27,7 +30,6 @@ class LocalLLM(LLM):
         stop: Optional[List[str]] = None,
         **kwargs: Any,
     ) -> str:
-        """เรียก API และคืน response มาเป็นสตริง"""
         res = requests.post(
             f"{self.api_url}/api/generate",
             json={
@@ -38,19 +40,31 @@ class LocalLLM(LLM):
         )
         res.raise_for_status()
         return res.json().get("response", "")
+    
 
+
+# ----------------------------------------
+# 2. Instantiate LLM
+# ----------------------------------------
 API_URL = "http://localhost:5433"
 MODEL_NAME = "scb10x/typhoon2.1-gemma3-4b:latest"
 llm = LocalLLM(api_url=API_URL, model_name=MODEL_NAME)
 
 
-from langchain.embeddings import HuggingFaceEmbeddings
-# Wrap SentenceTransformer ผ่าน LangChain
+
+
+# ----------------------------------------
+# 3. Prepare embeddings
+# ----------------------------------------
 embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-m3")
 
-from langchain.document_loaders import TextLoader
-import glob
 
+
+
+
+# ----------------------------------------
+# 4. Load documents from .txt files
+# ----------------------------------------
 paths = glob.glob("Raw-data-from-TTT\**\*.txt", recursive=True)
 documents = []
 for p in paths:
@@ -58,14 +72,25 @@ for p in paths:
     documents.extend(loader.load())
 
 
-from langchain.vectorstores import FAISS
-# สร้างและเก็บ Document embeddings ลงใน FAISS index
+
+
+# ----------------------------------------
+# 5. Build or load FAISS index
+# ----------------------------------------
 vectorstore = FAISS.from_documents(documents, embeddings)
-# บันทึก index ไว้ใช้งานครั้งถัดไป
 vectorstore.save_local("faiss_index")
 
-# Custom prompt template
-custom_template = """ใช้บริบทต่อไปนี้ในการตอบคำถามที่อยู่ท้ายบท
+
+
+
+# ----------------------------------------
+# 6. Define a PromptTemplate including chat history
+# ----------------------------------------
+custom_template = """\
+บทสนทนาที่ผ่านมา:
+{chat_history}
+
+ใช้บริบทต่อไปนี้ในการตอบคำถามที่อยู่ท้ายบท
 ผมคือ TTT-Assistant ผู้ช่วย AI ของบริษัท TTT Brothers Co., Ltd.
 ตอบเป็นภาษาไทย หากคุณไม่ทราบคำตอบ ให้ตอบเพียงว่าคุณไม่ทราบ อย่าพยายามแต่งคำตอบขึ้นมา
 
@@ -74,17 +99,29 @@ custom_template = """ใช้บริบทต่อไปนี้ในก�
 
 คำถาม: {question}
 
-คำตอบ: """
+คำตอบ:"""
 
 CUSTOM_PROMPT = PromptTemplate(
     template=custom_template,
-    input_variables=["context", "question"]
+    input_variables=["chat_history", "context", "question"]
 )
 
-# สร้าง Memory
+
+
+
+
+# ----------------------------------------
+# 7. Create memory for conversational history
+# ----------------------------------------
 memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
 
-# สร้าง QA Chain
+
+
+
+
+# ----------------------------------------
+# 8. Build the Conversational Retrieval QA chain
+# ----------------------------------------
 qa_chain = ConversationalRetrievalChain.from_llm(
     llm=llm,
     retriever=vectorstore.as_retriever(search_kwargs={"k": 2}),
@@ -92,22 +129,26 @@ qa_chain = ConversationalRetrievalChain.from_llm(
     combine_docs_chain_kwargs={"prompt": CUSTOM_PROMPT}
 )
 
-# แทนที่โค้ดตัวอย่างด้วย interactive chat loop
+
+
+
+
+# ----------------------------------------
+# 9. Interactive chat loop
+# ----------------------------------------
 print("\nTTT Assistant พร้อมให้บริการ! (พิมพ์ 'exit()' เพื่อออกจากโปรแกรม)")
 
 while True:
     try:
         question = input("\nคำถาม: ").strip()
-        
         if question.lower() == 'exit()':
             print("ขอบคุณที่ใช้บริการ!")
             break
-            
         if not question:
             continue
-            
+
         result = qa_chain({"question": question})
         print("\nคำตอบ:", result["answer"])
-        
+
     except Exception as e:
-        print(f"\nเกิดข้อผิดพลาด: {str(e)}")
+        print(f"\nเกิดข้อผิดพลาด: {e}")
