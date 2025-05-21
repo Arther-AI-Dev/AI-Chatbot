@@ -1,6 +1,11 @@
 import requests
 from typing import Optional, List, Dict, Any
 from langchain.llms.base import LLM
+from langchain.chains import ConversationalRetrievalChain
+from langchain.memory import ConversationBufferMemory
+from langchain.prompts import PromptTemplate
+
+
 
 class LocalLLM(LLM):
     # ประกาศฟิลด์ให้ Pydantic รู้จัก
@@ -59,14 +64,10 @@ vectorstore = FAISS.from_documents(documents, embeddings)
 # บันทึก index ไว้ใช้งานครั้งถัดไป
 vectorstore.save_local("faiss_index")
 
-from langchain.chains import ConversationalRetrievalChain
-from langchain.memory import ConversationBufferMemory
-from langchain.prompts import PromptTemplate
-
 # Custom prompt template
 custom_template = """ใช้บริบทต่อไปนี้ในการตอบคำถามที่อยู่ท้ายบท
 ผมคือ TTT-Assistant ผู้ช่วย AI ของบริษัท TTT Brothers Co., Ltd.
-หากคุณไม่ทราบคำตอบ ให้ตอบเพียงว่าคุณไม่ทราบ อย่าพยายามแต่งคำตอบขึ้นมา
+ตอบเป็นภาษาไทย หากคุณไม่ทราบคำตอบ ให้ตอบเพียงว่าคุณไม่ทราบ อย่าพยายามแต่งคำตอบขึ้นมา
 
 ข้อมูลที่มี:
 {context}
@@ -86,19 +87,19 @@ memory = ConversationBufferMemory(memory_key="chat_history", return_messages=Tru
 # สร้าง QA Chain
 qa_chain = ConversationalRetrievalChain.from_llm(
     llm=llm,
-    retriever=vectorstore.as_retriever(search_kwargs={"k": 5}),
+    retriever=vectorstore.as_retriever(search_kwargs={"k": 2}),
     memory=memory,
     combine_docs_chain_kwargs={"prompt": CUSTOM_PROMPT}
 )
 
 # แทนที่โค้ดตัวอย่างด้วย interactive chat loop
-print("\nTTT Assistant พร้อมให้บริการ! (พิมพ์ 'exit' เพื่อออกจากโปรแกรม)")
+print("\nTTT Assistant พร้อมให้บริการ! (พิมพ์ 'exit()' เพื่อออกจากโปรแกรม)")
 
 while True:
     try:
         question = input("\nคำถาม: ").strip()
         
-        if question.lower() == 'exit':
+        if question.lower() == 'exit()':
             print("ขอบคุณที่ใช้บริการ!")
             break
             
