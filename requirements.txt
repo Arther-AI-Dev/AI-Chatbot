@@ -7,3 +7,4 @@ faiss-cpu
 streamlit
 pytesseract
 pdf2image
+openai
