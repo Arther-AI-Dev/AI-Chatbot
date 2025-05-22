@@ -67,7 +67,7 @@ CUSTOM_PROMPT = PromptTemplate(
 )
 
 def initialize_qa_chain():
-    API_URL = "http://localhost:11433"
+    API_URL = "http://localhost:11434"
     MODEL_NAME = "scb10x/typhoon2.1-gemma3-4b:latest"
     llm = LocalLLM(api_url=API_URL, model_name=MODEL_NAME)
     
