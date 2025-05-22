@@ -1,9 +1,5 @@
 requests
 langchain
 fastapi
-datasets
-streamlit
 sentence-transformers
-pytesseract
 faiss-cpu
-pdf2image
