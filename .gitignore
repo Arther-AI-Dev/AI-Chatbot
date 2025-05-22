@@ -160,4 +160,4 @@ cython_debug/
 #.idea/
 /faiss_index
 
-/chat-window 5
+/chatwindow
