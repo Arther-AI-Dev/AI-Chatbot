@@ -1,5 +1,6 @@
 requests
 langchain
+langchain-community
 fastapi
 sentence-transformers
 faiss-cpu
