@@ -44,47 +44,7 @@ class LocalLLM(LLM):
 
 
 # ----------------------------------------
-# 2. Instantiate LLM
-# ----------------------------------------
-API_URL = "http://localhost:5433"
-MODEL_NAME = "scb10x/typhoon2.1-gemma3-4b:latest"
-llm = LocalLLM(api_url=API_URL, model_name=MODEL_NAME)
-
-
-
-
-# ----------------------------------------
-# 3. Prepare embeddings
-# ----------------------------------------
-embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-m3")
-
-
-
-
-
-# ----------------------------------------
-# 4. Load documents from .txt files
-# ----------------------------------------
-paths = glob.glob("Raw-data-from-TTT\**\*.txt", recursive=True)
-documents = []
-for p in paths:
-    loader = TextLoader(p, encoding="utf-8")
-    documents.extend(loader.load())
-
-
-
-
-# ----------------------------------------
-# 5. Build or load FAISS index
-# ----------------------------------------
-vectorstore = FAISS.from_documents(documents, embeddings)
-vectorstore.save_local("faiss_index")
-
-
-
-
-# ----------------------------------------
-# 6. Define a PromptTemplate including chat history
+# 2. Define a PromptTemplate including chat history
 # ----------------------------------------
 custom_template = """\
 บทสนทนาที่ผ่านมา:
@@ -106,49 +66,32 @@ CUSTOM_PROMPT = PromptTemplate(
     input_variables=["chat_history", "context", "question"]
 )
 
-
-
-
-
-# ----------------------------------------
-# 7. Create memory for conversational history
-# ----------------------------------------
-memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
-
-
-
-
-
-# ----------------------------------------
-# 8. Build the Conversational Retrieval QA chain
-# ----------------------------------------
-qa_chain = ConversationalRetrievalChain.from_llm(
-    llm=llm,
-    retriever=vectorstore.as_retriever(search_kwargs={"k": 2}),
-    memory=memory,
-    combine_docs_chain_kwargs={"prompt": CUSTOM_PROMPT}
-)
-
-
-
-
-
-# ----------------------------------------
-# 9. Interactive chat loop
-# ----------------------------------------
-print("\nTTT Assistant พร้อมให้บริการ! (พิมพ์ 'exit()' เพื่อออกจากโปรแกรม)")
-
-while True:
+def initialize_qa_chain():
+    API_URL = "http://localhost:11433"
+    MODEL_NAME = "scb10x/typhoon2.1-gemma3-4b:latest"
+    llm = LocalLLM(api_url=API_URL, model_name=MODEL_NAME)
+    
+    embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-m3")
+    
+    # Load or create vectorstore
     try:
-        question = input("\nคำถาม: ").strip()
-        if question.lower() == 'exit()':
-            print("ขอบคุณที่ใช้บริการ!")
-            break
-        if not question:
-            continue
-
-        result = qa_chain({"question": question})
-        print("\nคำตอบ:", result["answer"])
-
-    except Exception as e:
-        print(f"\nเกิดข้อผิดพลาด: {e}")
+        vectorstore = FAISS.load_local("faiss_index", embeddings)
+    except:
+        paths = glob.glob("Raw-data-from-TTT/**/*.txt", recursive=True)
+        documents = []
+        for p in paths:
+            loader = TextLoader(p, encoding="utf-8")
+            documents.extend(loader.load())
+        vectorstore = FAISS.from_documents(documents, embeddings)
+        vectorstore.save_local("faiss_index")
+    
+    memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
+    
+    qa_chain = ConversationalRetrievalChain.from_llm(
+        llm=llm,
+        retriever=vectorstore.as_retriever(search_kwargs={"k": 2}),
+        memory=memory,
+        combine_docs_chain_kwargs={"prompt": CUSTOM_PROMPT}
+    )
+    
+    return qa_chain
