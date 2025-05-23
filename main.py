@@ -3,11 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from chat import initialize_qa_chain, clear_memory
 import logging
-import warnings
-
-
-warnings.filterwarnings("ignore", category=UserWarning, module="streamlit")
-
 
 app = FastAPI()
 
