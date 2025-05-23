@@ -161,3 +161,4 @@ cython_debug/
 /faiss_index
 
 /chatwindow
+local_models/

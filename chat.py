@@ -2,12 +2,18 @@ import requests
 from typing import Optional, List, Dict, Any
 from langchain.llms.base import LLM
 from langchain.chains import ConversationalRetrievalChain
-from langchain.memory import ConversationBufferMemory
+from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain.prompts import PromptTemplate
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.document_loaders import TextLoader
-from langchain.vectorstores import FAISS
-import glob
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain_core.runnables import RunnableWithMessageHistory
+import os
+import logging
+
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # ----------------------------------------
 # 1. Define LocalLLM with pydantic fields
@@ -30,6 +36,10 @@ class LocalLLM(LLM):
         stop: Optional[List[str]] = None,
         **kwargs: Any,
     ) -> str:
+        # Log the incoming prompt to check chat history
+        logger.info(f"Prompt received: {prompt}")
+        logger.info(f"Additional kwargs: {kwargs}")
+        
         res = requests.post(
             f"{self.api_url}/api/generate",
             json={
@@ -47,18 +57,17 @@ class LocalLLM(LLM):
 # 2. Define a PromptTemplate including chat history
 # ----------------------------------------
 custom_template = """\
-บทสนทนาที่ผ่านมา:
-{chat_history}
-
-ใช้บริบทต่อไปนี้ในการตอบคำถามที่อยู่ท้ายบท
+\
+บทสนทนาที่ผ่านมา:{chat_history}
+\
 ฉันคือ TTT-Assistant ผู้ช่วย AI ของบริษัท TTT Brothers Co., Ltd.ค่ะ
-หากฉันไม่ทราบคำตอบ ให้ตอบเพียงว่าขอโทษนะคะฉันไม่ทราบค่ะ จะไม่พยายามแต่งคำตอบขึ้นมา
-
-ข้อมูลที่มี:
-{context}
-
-คำถาม: {question}
-
+หากฉันไม่ทราบคำตอบ ให้ตอบเพียงว่า ขอโทษนะคะฉันไม่ทราบค่ะ
+\
+ข้อมูลที่มี:{context}
+\
+คำถาม:{question}
+ตอบกลับเป็นภาษาไทย
+\
 คำตอบ:"""
 
 CUSTOM_PROMPT = PromptTemplate(
@@ -66,32 +75,80 @@ CUSTOM_PROMPT = PromptTemplate(
     input_variables=["chat_history", "context", "question"]
 )
 
-def initialize_qa_chain():
+# Add global variable for QA chain
+_message_histories = {}
+_qa_chain_dict = {}
+
+FAISS_INDEX_PATH = "faiss_index"
+LOCAL_MODEL_PATH = "local_models/bge-m3"
+
+def get_message_history(session_id: str) -> ChatMessageHistory:
+    """Get or create message history for a specific session"""
+    if session_id not in _message_histories:
+        _message_histories[session_id] = ChatMessageHistory()
+    return _message_histories[session_id]
+
+def initialize_qa_chain(session_id: str = "default"):
+    """Initialize or get existing QA chain for a session"""
+    if session_id in _qa_chain_dict:
+        return _qa_chain_dict[session_id]
+        
     API_URL = "http://localhost:11434"
     MODEL_NAME = "scb10x/typhoon2.1-gemma3-4b:latest"
     llm = LocalLLM(api_url=API_URL, model_name=MODEL_NAME)
     
-    embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-m3")
+    # Check if model exists
+    if not os.path.exists(LOCAL_MODEL_PATH):
+        raise Exception(
+            f"Model not found at {LOCAL_MODEL_PATH}. "
+            "Please run 'python download_model.py' first."
+        )
     
-    # Load or create vectorstore
+    embeddings = HuggingFaceEmbeddings(model_name=LOCAL_MODEL_PATH)
+    
+    # Check if FAISS index exists and load
+    if not os.path.exists(FAISS_INDEX_PATH):
+        raise Exception(
+            f"FAISS index not found at {FAISS_INDEX_PATH}. "
+            "Please run 'python build_index.py' first. "
+            "Make sure you have text files in Raw-data-from-TTT/ directory."
+        )
+        
     try:
-        vectorstore = FAISS.load_local("faiss_index", embeddings)
-    except:
-        paths = glob.glob("Raw-data-from-TTT/**/*.txt", recursive=True)
-        documents = []
-        for p in paths:
-            loader = TextLoader(p, encoding="utf-8")
-            documents.extend(loader.load())
-        vectorstore = FAISS.from_documents(documents, embeddings)
-        vectorstore.save_local("faiss_index")
+        vectorstore = FAISS.load_local(
+            FAISS_INDEX_PATH, 
+            embeddings,
+            allow_dangerous_deserialization=True  # Add this parameter
+        )
+    except Exception as e:
+        raise Exception(
+            f"Error loading FAISS index from {FAISS_INDEX_PATH}: {str(e)}\n"
+            "The index may be corrupted. Try deleting it and running build_index.py again."
+        ) from e
     
-    memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
-    
+    # Create base chain without memory
     qa_chain = ConversationalRetrievalChain.from_llm(
         llm=llm,
-        retriever=vectorstore.as_retriever(search_kwargs={"k": 2}),
-        memory=memory,
-        combine_docs_chain_kwargs={"prompt": CUSTOM_PROMPT}
+        retriever=vectorstore.as_retriever(search_kwargs={"k": 3}),
+        combine_docs_chain_kwargs={"prompt": CUSTOM_PROMPT},
+        return_source_documents=True,
+        return_generated_question=False,
     )
     
-    return qa_chain
+    # Wrap with message history
+    qa_with_history = RunnableWithMessageHistory(
+        qa_chain,
+        lambda session_id: get_message_history(session_id),
+        input_messages_key="question",
+        history_messages_key="chat_history"
+    )
+    
+    _qa_chain_dict[session_id] = qa_with_history
+    return qa_with_history
+
+def clear_memory(session_id: str):
+    """Clear conversation memory for a specific session"""
+    if session_id in _message_histories:
+        _message_histories[session_id] = ChatMessageHistory()
+    if session_id in _qa_chain_dict:
+        del _qa_chain_dict[session_id]
