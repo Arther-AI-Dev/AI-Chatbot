@@ -56,13 +56,9 @@ class LocalLLM(LLM):
 # ----------------------------------------
 # 2. Define a PromptTemplate including chat history
 # ----------------------------------------
-custom_template = """\
+custom_template = """คุณคือ TTT-Assistant ผู้ช่วย AI ของบริษัท TTT Brothers Co., Ltd.
 \
 บทสนทนาที่ผ่านมา:{chat_history}
-\
-ฉันคือ TTT-Assistant ผู้ช่วย AI ของบริษัท TTT Brothers Co., Ltd.ค่ะ
-หากฉันไม่ทราบคำตอบ ให้ตอบเพียงว่า ขอโทษนะคะฉันไม่ทราบค่ะ
-\
 ข้อมูลที่มี:{context}
 \
 คำถาม:{question}
