@@ -4,10 +4,8 @@ from langchain.vectorstores import FAISS
 import glob
 
 def build_faiss_index():
-    print("Starting to build FAISS index...")
-    
-    # Initialize embeddings
-    embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-m3")
+    print("Starting to build FAISS index...")    # Initialize embeddings with local model
+    embeddings = HuggingFaceEmbeddings(model_name="local_models/bge-m3")
     
     # Load documents
     paths = glob.glob("Raw-data-from-TTT/**/*.txt", recursive=True)

@@ -8,3 +8,4 @@ streamlit
 pytesseract
 pdf2image
 openai
+langchain_huggingface
