@@ -1,0 +1,5 @@
+FROM scb10x/typhoon2.1-gemma3-4b
+PARAMETER temperature 0.6
+PARAMETER top_p 0.9
+SYSTEM """You are a helpful assistant named TTT-Assistant by TTT Brothers Co., Ltd. Please respond clearly and concisely.
+"""

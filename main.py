@@ -1,11 +1,16 @@
-from fastapi import FastAPI, HTTPException, Depends
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from chat import initialize_qa_chain, clear_memory
 import logging
+from enum import Enum
 
-app = FastAPI()
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 
+from chat import get_org_chain, get_general_chain, clear_memory
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+app = FastAPI(title="TTT-Assistant API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -14,54 +19,60 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-qa_chain = None
+class Mode(str, Enum):
+    org = "org"
+    general = "general"
 
 class ChatRequest(BaseModel):
     question: str
-    session_id: str = "default"
+    session_id: str = Field("default")
+    mode: Mode = Field(Mode.org)
 
-@app.on_event("startup")
-async def startup_event():
-    global qa_chain
-    qa_chain = initialize_qa_chain()
+class ChatResponse(BaseModel):
+    answer: str
+    source_documents: list[str] | None = None  # org เท่านั้น
 
-@app.post("/chat")
-def chat_endpoint(request: ChatRequest):
+@app.post("/chat", response_model=ChatResponse)
+async def chat_endpoint(req: ChatRequest):
     try:
-        qa_chain = initialize_qa_chain(request.session_id)
-        result = qa_chain.invoke(
-            {"question": request.question},
-            config={"configurable": {"session_id": request.session_id}}
+        chain = (
+            get_org_chain(req.session_id)
+            if req.mode == Mode.org
+            else get_general_chain(req.session_id)
         )
-        
-        # Log the result for debugging
-        logging.info(f"Chat result: {result}")
-        
-        # Handle potential missing fields gracefully
-        answer = result.get("answer", "")
-        if not answer and isinstance(result, dict):
-            # Try to get answer from output field
-            answer = result.get("output", "No answer generated")
-            
-        source_docs = result.get("source_documents", [])
-        if isinstance(source_docs, list):
-            source_contents = [doc.page_content for doc in source_docs]
-        else:
-            source_contents = []
-            
-        return {
-            "answer": answer,
-            "source_documents": source_contents
-        }
-    except Exception as e:
-        logging.error(f"Error in chat endpoint: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        result = chain.invoke(
+            {"question": req.question},
+            config={"configurable": {"session_id": req.session_id}},
+        )
+
+        answer = (
+            result.get("answer")
+            or result.get("output")
+            or result.get("text")
+            or ""
+        )
+        if req.mode == Mode.org and not answer.strip():
+            answer = (
+                "ขอโทษนะคะ ไม่พบข้อมูลขององค์กรที่เกี่ยวข้องกับคำถามนี้ "
+                "ลองถามในโหมดทั่วไปดูนะคะ"
+            )
+
+        src_docs = (
+            [d.page_content for d in result.get("source_documents", [])]
+            if req.mode == Mode.org
+            else None
+        )
+        return ChatResponse(answer=answer, source_documents=src_docs)
+
+    except Exception as exc:
+        logger.exception("Chat endpoint error: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
 
 @app.post("/clear")
 async def clear_chat(session_id: str = "default"):
     clear_memory(session_id)
-    return {"status": "success", "message": f"Cleared chat history for session {session_id}"}
+    return {"status": "success", "message": f"Cleared session '{session_id}'"}
 
 @app.get("/")
-def read_root():
-    return {"message": "Welcome AI Chatbot is running"}
+def root():
+    return {"message": "TTT-Assistant backend is running"}

@@ -1,148 +1,179 @@
-import requests
-from typing import Optional, List, Dict, Any
-from langchain.llms.base import LLM
-from langchain.chains import ConversationalRetrievalChain
-from langchain_community.chat_message_histories import ChatMessageHistory
-from langchain.prompts import PromptTemplate
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
-from langchain_core.runnables import RunnableWithMessageHistory
-import os
+from __future__ import annotations
+
 import logging
+from typing import Any, Dict, List, Optional
 
+import requests
+from langchain.llms.base import LLM
+from langchain.prompts import PromptTemplate
+from langchain.chains import ConversationalRetrievalChain, LLMChain
+from langchain_community.chat_message_histories import ChatMessageHistory
+from langchain_community.vectorstores import FAISS
+from langchain.docstore.document import Document
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_core.runnables import RunnableWithMessageHistory
 
-# Set up logging
+# ---- compatibility import สำหรับ LC 0.1 / 0.2 ----
+try:
+    from langchain_core.retrievers import BaseRetriever
+except ImportError:  # LC < 0.2
+    from langchain.retrievers import BaseRetriever  # type: ignore
+
+from pydantic import ConfigDict
+
+# ─────────────────── logging ───────────────────
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ----------------------------------------
-# 1. Define LocalLLM with pydantic fields
-# ----------------------------------------
+# ─────────────────── Ollama wrapper ───────────────────
 class LocalLLM(LLM):
     api_url: str
     model_name: str
 
     @property
-    def _llm_type(self) -> str:
+    def _llm_type(self) -> str:  # type: ignore[override]
         return "local_llm"
 
     @property
-    def _identifying_params(self) -> Dict[str, Any]:
+    def _identifying_params(self) -> Dict[str, Any]:  # type: ignore[override]
         return {"model": self.model_name, "api_url": self.api_url}
 
-    def _call(
-        self,
-        prompt: str,
-        stop: Optional[List[str]] = None,
-        **kwargs: Any,
+    def _call(  # type: ignore[override]
+        self, prompt: str, stop: Optional[List[str]] = None, **kwargs: Any
     ) -> str:
-        # Log the incoming prompt to check chat history
-        logger.info(f"Prompt received: {prompt}")
-        logger.info(f"Additional kwargs: {kwargs}")
-        
-        res = requests.post(
+        resp = requests.post(
             f"{self.api_url}/api/generate",
-            json={
-                "model": self.model_name,
-                "prompt": prompt,
-                "stream": False,
-            },
+            json={"model": self.model_name, "prompt": prompt, "stream": False},
+            timeout=120,
         )
-        res.raise_for_status()
-        return res.json().get("response", "")
-    
+        resp.raise_for_status()
+        return resp.json()["response"]
 
+# ─────────────────── Prompt templates ───────────────────
+ORG_PROMPT = PromptTemplate(
+    template="""
+บทสนทนาที่ผ่านมา
+{chat_history}
 
-# ----------------------------------------
-# 2. Define a PromptTemplate including chat history
-# ----------------------------------------
-custom_template = """
-บทสนทนาที่ผ่านมา:{chat_history}
-\
-ข้อมูลที่มี:{context}
-\
-คำถาม:{question}
-"""
+ข้อมูลอ้างอิงจากองค์กร
+{context}
 
-CUSTOM_PROMPT = PromptTemplate(
-    template=custom_template,
-    input_variables=["chat_history", "context", "question"]
+คำถาม
+{question}
+
+จงตอบโดยอิงข้อมูลข้างต้น  หากข้อมูลอยู่ใน chat_history ก็ใช้ได้
+ถ้าหาข้อมูลไม่ได้ทั้งใน context และ chat_history ให้ตอบว่า
+“ขอโทษนะคะ ไม่พบข้อมูลขององค์กรที่เกี่ยวข้องกับคำถามนี้ ลองถามในโหมดทั่วไปดูนะคะ”
+""",
+    input_variables=["chat_history", "context", "question"],
 )
 
-# Add global variable for QA chain
-_message_histories = {}
-_qa_chain_dict = {}
+CONDENSE_PROMPT = PromptTemplate(
+    template="""
+สรุปหรือเติมเต็มคำถามต่อไปนี้ให้ชัดเจน (ภาษาไทย) โดยอ้างอิงบทสนทนา
 
-FAISS_INDEX_PATH = "faiss_index"
-LOCAL_MODEL_PATH = "local_models/bge-m3"
+บทสนทนา:
+{chat_history}
 
-def get_message_history(session_id: str) -> ChatMessageHistory:
-    """Get or create message history for a specific session"""
-    if session_id not in _message_histories:
-        _message_histories[session_id] = ChatMessageHistory()
-    return _message_histories[session_id]
+คำถามเดิม:
+{question}
 
-def initialize_qa_chain(session_id: str = "default"):
-    """Initialize or get existing QA chain for a session"""
-    if session_id in _qa_chain_dict:
-        return _qa_chain_dict[session_id]
-        
-    API_URL = "http://localhost:11434"
-    MODEL_NAME = "TTT-Assistant:latest"
-    llm = LocalLLM(api_url=API_URL, model_name=MODEL_NAME)
-    
-    # Check if model exists
-    if not os.path.exists(LOCAL_MODEL_PATH):
-        raise Exception(
-            f"Model not found at {LOCAL_MODEL_PATH}. "
-            "Please run 'python download_model.py' first."
-        )
-    
-    embeddings = HuggingFaceEmbeddings(model_name=LOCAL_MODEL_PATH)
-    
-    # Check if FAISS index exists and load
-    if not os.path.exists(FAISS_INDEX_PATH):
-        raise Exception(
-            f"FAISS index not found at {FAISS_INDEX_PATH}. "
-            "Please run 'python build_index.py' first. "
-            "Make sure you have text files in Raw-data-from-TTT/ directory."
-        )
-        
-    try:
-        vectorstore = FAISS.load_local(
-            FAISS_INDEX_PATH, 
-            embeddings,
-            allow_dangerous_deserialization=True  # Add this parameter
-        )
-    except Exception as e:
-        raise Exception(
-            f"Error loading FAISS index from {FAISS_INDEX_PATH}: {str(e)}\n"
-            "The index may be corrupted. Try deleting it and running build_index.py again."
-        ) from e
-    
-    # Create base chain without memory
-    qa_chain = ConversationalRetrievalChain.from_llm(
-        llm=llm,
-        retriever=vectorstore.as_retriever(search_kwargs={"k": 3}),
-        combine_docs_chain_kwargs={"prompt": CUSTOM_PROMPT},
+คำถามที่สรุปแล้ว:
+""",
+    input_variables=["chat_history", "question"],
+)
+
+GENERAL_PROMPT = PromptTemplate(
+    template="{chat_history}\nผู้ใช้: {question}\nผู้ช่วย:",
+    input_variables=["chat_history", "question"],
+)
+
+# ───────────── caches / paths / constants ─────────────
+_message_histories: Dict[str, ChatMessageHistory] = {}
+_org_chain_cache: Dict[str, RunnableWithMessageHistory] = {}
+_general_chain_cache: Dict[str, RunnableWithMessageHistory] = {}
+
+FAISS_PATH = "faiss_index"
+EMBED_MODEL = "local_models/bge-m3"
+OLLAMA_URL = "http://localhost:11434"
+MODEL_NAME = "TTT-Assistant-4b:latest"
+
+# ─────────────────── helpers ───────────────────
+def _llm() -> LocalLLM:
+    return LocalLLM(api_url=OLLAMA_URL, model_name=MODEL_NAME)
+
+
+def _history(sess: str) -> ChatMessageHistory:
+    return _message_histories.setdefault(sess, ChatMessageHistory())
+
+# ──────────────── FallbackRetriever ────────────────
+class FallbackRetriever(BaseRetriever):
+    """
+    ถ้า base_retriever หาเอกสารไม่พบ → คืน Document เปล่า 1 ชิ้น
+    เพื่อไม่ให้ `context` ว่าง (LLM จะยังเห็น chat_history)
+    """
+
+    base_retriever: Any
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    # sync
+    def _get_relevant_documents(self, query: str):
+        docs = self.base_retriever.get_relevant_documents(query)
+        return docs or [Document(page_content="")]
+
+    # async
+    async def _aget_relevant_documents(self, query: str):
+        docs = await self.base_retriever.aget_relevant_documents(query)
+        return docs or [Document(page_content="")]
+
+# ─────────────────── Chains ───────────────────
+def get_org_chain(session_id: str) -> RunnableWithMessageHistory:
+    if session_id in _org_chain_cache:
+        return _org_chain_cache[session_id]
+
+    embeddings = HuggingFaceEmbeddings(model_name=EMBED_MODEL)
+    store = FAISS.load_local(FAISS_PATH, embeddings, allow_dangerous_deserialization=True)
+    retriever = FallbackRetriever(
+        base_retriever=store.as_retriever(search_kwargs={"k": 3})
+    )
+
+    qa = ConversationalRetrievalChain.from_llm(
+        llm=_llm(),
+        retriever=retriever,
+        condense_question_llm=_llm(),  # for LC < 0.2
+        combine_docs_chain_kwargs={"prompt": ORG_PROMPT},
         return_source_documents=True,
-        return_generated_question=False,
+        verbose=True,
     )
-    
-    # Wrap with message history
-    qa_with_history = RunnableWithMessageHistory(
-        qa_chain,
-        lambda session_id: get_message_history(session_id),
-        input_messages_key="question",
-        history_messages_key="chat_history"
-    )
-    
-    _qa_chain_dict[session_id] = qa_with_history
-    return qa_with_history
+    qa.question_generator.prompt = CONDENSE_PROMPT  # type: ignore[attr-defined]
 
+    wrapped = RunnableWithMessageHistory(
+        qa,
+        lambda sid: _history(sid),
+        input_messages_key="question",
+        history_messages_key="chat_history",
+    )
+    _org_chain_cache[session_id] = wrapped
+    return wrapped
+
+
+def get_general_chain(session_id: str) -> RunnableWithMessageHistory:
+    if session_id in _general_chain_cache:
+        return _general_chain_cache[session_id]
+
+    llm_chain = LLMChain(llm=_llm(), prompt=GENERAL_PROMPT, output_key="answer")
+
+    wrapped = RunnableWithMessageHistory(
+        llm_chain,
+        lambda sid: _history(sid),
+        input_messages_key="question",
+        history_messages_key="chat_history",
+    )
+    _general_chain_cache[session_id] = wrapped
+    return wrapped
+
+# ─────────────────── utilities ───────────────────
 def clear_memory(session_id: str):
-    """Clear conversation memory for a specific session"""
-    if session_id in _message_histories:
-        _message_histories[session_id] = ChatMessageHistory()
-    if session_id in _qa_chain_dict:
-        del _qa_chain_dict[session_id]
+    _message_histories.pop(session_id, None)
+    _org_chain_cache.pop(session_id, None)
+    _general_chain_cache.pop(session_id, None)
