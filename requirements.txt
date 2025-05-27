@@ -1,0 +1,11 @@
+requests
+langchain
+langchain-community
+fastapi
+sentence-transformers
+faiss-cpu
+streamlit
+pytesseract
+pdf2image
+openai
+langchain_huggingface
