@@ -56,13 +56,13 @@ class LocalLLM(LLM):
 # ----------------------------------------
 # 2. Define a PromptTemplate including chat history
 # ----------------------------------------
-custom_template = """ต่อไปนี้คุณชื่อ TTT-Assistant ผู้ช่วย AI ของบริษัท TTT Brothers Co., Ltd.
-\
+custom_template = """
 บทสนทนาที่ผ่านมา:{chat_history}
+\
 ข้อมูลที่มี:{context}
 \
 คำถาม:{question}
-ตอบกลับเป็นภาษาไทย"""
+"""
 
 CUSTOM_PROMPT = PromptTemplate(
     template=custom_template,
@@ -88,7 +88,7 @@ def initialize_qa_chain(session_id: str = "default"):
         return _qa_chain_dict[session_id]
         
     API_URL = "http://localhost:11434"
-    MODEL_NAME = "scb10x/typhoon2.1-gemma3-4b:latest"
+    MODEL_NAME = "TTT-Assistant:latest"
     llm = LocalLLM(api_url=API_URL, model_name=MODEL_NAME)
     
     # Check if model exists

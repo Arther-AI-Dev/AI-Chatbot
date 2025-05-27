@@ -162,3 +162,5 @@ cython_debug/
 
 /chatwindow
 local_models/
+
+/video_to_text_API
