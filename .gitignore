@@ -164,3 +164,7 @@ cython_debug/
 local_models/
 
 /video_to_text_API
+
+/ffmpeg/ffmpeg.exe
+/ffmpeg/ffplay.exe
+/ffmpeg/ffprobe.exe
