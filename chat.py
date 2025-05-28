@@ -61,9 +61,6 @@ ORG_PROMPT = PromptTemplate(
 คำถาม
 {question}
 
-จงตอบโดยอิงข้อมูลข้างต้น  หากข้อมูลอยู่ใน chat_history ก็ใช้ได้
-ถ้าหาข้อมูลไม่ได้ทั้งใน context และ chat_history ให้ตอบว่า
-“ขอโทษนะคะ ไม่พบข้อมูลขององค์กรที่เกี่ยวข้องกับคำถามนี้ ลองถามในโหมดทั่วไปดูนะคะ”
 """,
     input_variables=["chat_history", "context", "question"],
 )
